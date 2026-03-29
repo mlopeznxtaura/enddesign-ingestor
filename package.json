@@ -5,7 +5,7 @@
   "main": "src/index.js",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/dev-server.js",
     "build": "vite build",
     "preview": "vite preview",
     "ingest": "node src/cli/ingest.js",

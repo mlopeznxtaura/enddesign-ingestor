@@ -222,26 +222,70 @@ function setupEventListeners() {
  * Handle Start Build
  */
 async function handleStartBuild() {
-  addLog('Starting build process...', 'info');
+  addLog('Initializing Agent Bridge connection...', 'info');
   updateBuildStatus('running');
 
   try {
-    // Check if we have a DAG to process
-    const dagData = getCurrentDAG();
-    if (!dagData || dagData.length === 0) {
-      addLog('No DAG data found. Please ingest a design first.', 'error');
+    // 1. Trigger agent start via API
+    const response = await fetch('http://localhost:8000/start?resume=true', { method: 'POST' });
+    if (!response.ok) throw new Error('Failed to start agent API');
+    
+    addLog('Agent process spawned successfully', 'success');
+    
+    // 2. Connect to log websocket
+    const socket = new WebSocket('ws://localhost:8000/ws/logs');
+    
+    socket.onopen = () => {
+      addLog('Live log stream connected', 'info');
+    };
+    
+    socket.onmessage = (event) => {
+      try {
+        const log = JSON.parse(event.data);
+        addLog(log.message, log.level || 'info');
+        
+        // Update task progress if possible
+        if (log.message.includes('Processing task:')) {
+          const taskId = log.message.split('Processing task:')[1].trim();
+          updateBuildState({ currentTask: taskId });
+        }
+        
+        if (log.message.includes('Task completed:')) {
+          buildState.completedTasks += 1;
+          renderBuildUI();
+        }
+        
+        if (log.message.includes('Wrote file:')) {
+          const filePath = log.message.split('Wrote file:')[1].trim();
+          const fileName = filePath.split('\\').pop().split('/').pop();
+          addGeneratedFile({ path: filePath, name: fileName, status: 'generated' });
+        }
+        
+        if (log.message.includes('Agent loop finished:')) {
+          updateBuildStatus('done');
+          socket.close();
+        }
+      } catch (err) {
+        console.error('Log parse error:', err);
+      }
+    };
+    
+    socket.onerror = (err) => {
+      addLog('Log stream websocket error', 'error');
       updateBuildStatus('error');
-      return;
-    }
+    };
+    
+    socket.onclose = () => {
+      addLog('Live log stream closed', 'info');
+    };
 
-    addLog(`Found ${dagData.length} nodes to process`, 'info');
-    updateBuildState({ totalTasks: dagData.length });
-
-    // Simulate build process (in real implementation, this would call Python agent)
-    buildProcess = simulateBuild(dagData);
+    buildProcess = { stop: () => {
+      socket.close();
+      fetch('http://localhost:8000/stop', { method: 'POST' });
+    }};
 
   } catch (error) {
-    addLog(`Build error: ${error.message}`, 'error');
+    addLog(`Agent error: ${error.message}`, 'error');
     updateBuildStatus('error');
   }
 }
