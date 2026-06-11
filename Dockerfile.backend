@@ -1,0 +1,15 @@
+FROM python:3.11-slim
+WORKDIR /app
+
+# Install deps
+RUN pip install fastapi uvicorn google-generativeai
+
+# Copy agent code
+COPY agent/ ./agent/
+COPY .env ./
+
+ENV PORT=8000
+ENV PYTHONUNBUFFERED=1
+
+EXPOSE 8000
+CMD ["uvicorn", "agent.api:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -66,7 +66,7 @@ export function renderDAG(layers) {
     if (li < reversed.length - 1) {
       const arrow = document.createElement('div')
       arrow.className = 'dag-arrow'
-      arrow.textContent = '↓'
+      arrow.textContent = 'v'
       layerEl.appendChild(arrow)
     }
 
@@ -107,7 +107,7 @@ export function renderNodeOutput(node, components) {
           ${triggerRow('layer', node.layer || node.type)}
           ${node.desc ? triggerRow('context', node.desc) : ''}
           ${triggerRow('trigger', triggerLabel(node.type))}
-          ${(node.edges || []).length ? triggerRow('edges →', node.edges.join(', ')) : ''}
+          ${(node.edges || []).length ? triggerRow('edges ->', node.edges.join(', ')) : ''}
         </div>
       </div>
     </div>
@@ -139,7 +139,7 @@ function renderComponentCard(c) {
 function triggerRow(label, value) {
   return `
     <div class="trigger-row">
-      <span class="trigger-arrow">→</span>
+      <span class="trigger-arrow">-></span>
       <span class="trigger-label">${label}</span>
       <span class="trigger-value">${value}</span>
     </div>
@@ -152,9 +152,9 @@ function typeColor(type) {
 
 function triggerLabel(type) {
   return {
-    ui: 'onClick handler → function layer',
-    fn: 'function call → I/O layer',
-    io: 'data boundary → root',
+    ui: 'onClick handler -> function layer',
+    fn: 'function call -> I/O layer',
+    io: 'data boundary -> root',
     root: 'root capability (entrypoint)',
   }[type] || 'maps to handler'
 }

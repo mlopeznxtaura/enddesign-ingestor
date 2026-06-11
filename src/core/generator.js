@@ -99,7 +99,7 @@ On each iteration:
 2. Find first task with status: "pending"
 3. Execute it
 4. Write result + hash to task_status.json
-5. If all done → emit DONE signal and stop
+5. If all done -> emit DONE signal and stop
 
 ## Constraints
 - Never skip a task without logging the reason

@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any
 
 from .logger import setup_logger
 from .template_coder import TemplateCoder
-from .llm_coder import LLMDcoder
+from .gemini_coder import GeminiCoder
 from .syntax_check import SyntaxChecker
 
 logger = setup_logger(__name__)
@@ -30,7 +30,7 @@ class HybridRouter:
     def __init__(self):
         """Initialize hybrid router."""
         self.template_coder = TemplateCoder()
-        self.llm_coder = LLMDcoder()
+        self.llm_coder = GeminiCoder()
         self.syntax_checker = SyntaxChecker()
 
     def generate_code(self, task: Dict[str, Any]) -> Optional[str]:

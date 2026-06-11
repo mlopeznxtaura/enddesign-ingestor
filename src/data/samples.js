@@ -1,4 +1,4 @@
-// samples.js — built-in design specs for quick testing
+// samples.js - built-in design specs for quick testing
 
 export const SAMPLES = {
   dashboard: `UI Design: SaaS Analytics Dashboard
@@ -16,13 +16,13 @@ Screens:
 Trigger: prompt.md loaded
 Steps:
 1. Parse task list from prompt.md
-2. Check task_status.json — skip completed
+2. Check task_status.json -- skip completed
 3. Select next pending task
 4. Determine required tools/capabilities
 5. Execute task (code gen / file write / API call)
 6. Update task_status.json with result + hash
-7. If all tasks done → emit completion signal
-8. Else → loop back to step 3
+7. If all tasks done -> emit completion signal
+8. Else -> loop back to step 3
 
 Error handling:
 - On failure: write error to status, increment retry counter
@@ -42,20 +42,20 @@ UI:
   qvrm: `Qvrm Trust Protocol DAG
 
 Root: TrustEvent
-├─ AgentIdentity
-│  ├─ DID resolution
-│  ├─ CapabilityAttestation
-│  └─ ReputationScore (aggregated)
-├─ TaskContract
-│  ├─ TaskSpec (input schema)
-│  ├─ CompletionCriteria
-│  └─ EscrowConditions
-├─ ExecutionTrace
-│  ├─ ChainOfThought capture
-│  ├─ ToolCallLog
-│  └─ OutputHash
-└─ GovernanceVote
-   ├─ QuorumCheck
-   ├─ VoteCast
-   └─ ResolutionEmit`
++-- AgentIdentity
+|   +-- DID resolution
+|   +-- CapabilityAttestation
+|   +-- ReputationScore (aggregated)
++-- TaskContract
+|   +-- TaskSpec (input schema)
+|   +-- CompletionCriteria
+|   +-- EscrowConditions
++-- ExecutionTrace
+|   +-- ChainOfThought capture
+|   +-- ToolCallLog
+|   +-- OutputHash
++-- GovernanceVote
+    +-- QuorumCheck
+    +-- VoteCast
+    +-- ResolutionEmit`
 }
