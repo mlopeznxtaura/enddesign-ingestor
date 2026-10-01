@@ -24,6 +24,8 @@ import { initBuildUI, getBuildState, addGeneratedFile, setTotalTasks } from './c
 // ── STATE ─────────────────────────────────────────────────────────────
 let currentLayers = []
 let currentComponents = []
+let pipelineContext = { domain: 'app-ui', taskPlan: null, fidelity: null }
+let pendingImage = null
 let statusPollers = {}
 
 // ── BOOT ──────────────────────────────────────────────────────────────
@@ -117,28 +119,91 @@ export function handleCredentialExpiry() {
 }
 
 // ── INGEST ─────────────────────────────────────────────────────────────
-function ingest() {
+async function ingest() {
   const text = document.getElementById('designInput').value.trim()
   const type = document.getElementById('designType').value
   const target = document.getElementById('outputTarget').value
 
-  if (!text) return
+  if (!text && !pendingImage) return
 
   setLoading(true)
-  setStatus('Parsing design…')
+  setStatus('Extracting structure…')
 
-  // Small timeout so loading bar renders before sync work
-  setTimeout(() => {
+  let pipelineOk = false
+  try {
+    const body = { type, useIbm: true }
+    if (pendingImage) {
+      body.image = pendingImage.data
+      body.imageMime = pendingImage.mime
+    } else {
+      body.text = text
+    }
+
+    const res = await fetch('/api/pipeline/ingest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+    if (res.ok) {
+      const data = await res.json()
+      if (data.layers?.length) {
+        currentLayers = data.layers
+        pipelineContext = {
+          domain: data.domain || 'app-ui',
+          taskPlan: data.taskPlan,
+          fidelity: data.fidelity,
+          structure: data.structure,
+          manifest: data.manifest,
+          pipeline: data.pipeline || 'legacy',
+          pipelineStats: data.pipelineStats,
+        }
+        window.pipelineContext = pipelineContext
+        window.pipelineTaskPlan = data.taskPlan
+        window.pipelineManifest = data.manifest
+        pipelineOk = true
+        const fid = data.fidelity?.score != null ? ` fidelity ${data.fidelity.score}%` : ''
+        const pipe = data.pipeline && data.pipeline !== 'legacy' ? ` [${data.pipeline}]` : ''
+        const manifestN = data.manifest?.files?.length ? ` manifest ${data.manifest.files.length} files` : ''
+        let statusMsg = `Pipeline mapped DAG [${data.domain}]${pipe}${manifestN}${fid} (${data.source})`
+        if (data.warnings?.length) {
+          statusMsg += ` — WARN: ${data.warnings[0]}`
+          console.warn('Ingest warnings:', data.warnings)
+        }
+        setStatus(statusMsg)
+      }
+    }
+  } catch (e) {
+    console.warn('Pipeline ingest fallback:', e.message)
+  }
+
+  if (!pipelineOk) {
     currentLayers = parseDesignToDAG(text, type)
-    renderDAG(currentLayers)
-    setStatus('Mapping functions…')
+    pipelineContext = { domain: 'app-ui', taskPlan: null, fidelity: null }
+    setStatus('Local parser mapped DAG')
+  }
 
-    setTimeout(() => {
-      currentComponents = generateComponents(currentLayers, target)
-      renderComponents(currentComponents)
-      setLoading(false)
-    }, 300)
-  }, 100)
+  if (!currentLayers.length) {
+    setStatus('Ingest failed — paste full HTML or drop image')
+    setLoading(false)
+    return
+  }
+
+  if (pipelineContext.fidelity?.score != null && pipelineContext.fidelity.score < 40) {
+    setStatus(`Low fidelity ${pipelineContext.fidelity.score}% — check input is full HTML mockup`)
+  }
+
+  window.currentLayers = currentLayers
+  renderDAG(currentLayers)
+
+  const taskCount = pipelineContext.taskPlan?.tasks?.length
+    || currentLayers.flatMap(l => l.nodes || []).filter(n => n.type !== 'root').length
+  setTotalTasks(taskCount)
+
+  currentComponents = generateComponents(currentLayers, target)
+  renderComponents(currentComponents)
+  pendingImage = null
+  setLoading(false)
 }
 
 // ── EVENT BINDINGS ─────────────────────────────────────────────────────
@@ -152,6 +217,11 @@ document.addEventListener('click', e => {
   // Clear button
   if (e.target.id === 'clearBtn') {
     document.getElementById('designInput').value = ''
+    pendingImage = null
+    setDropZoneImageState(false)
+    pipelineContext = { domain: 'app-ui', taskPlan: null, fidelity: null }
+    window.pipelineContext = pipelineContext
+    window.pipelineTaskPlan = null
     currentLayers = []
     currentComponents = []
     renderDAG([])
@@ -163,7 +233,13 @@ document.addEventListener('click', e => {
   const sample = e.target.closest('.sample-item')
   if (sample) {
     const key = sample.dataset.sample
-    if (SAMPLES[key]) document.getElementById('designInput').value = SAMPLES[key]
+    if (key === 'aerohub') {
+      loadAerohubPerfSample()
+    } else if (SAMPLES[key]) {
+      pendingImage = null
+      setDropZoneImageState(false)
+      document.getElementById('designInput').value = SAMPLES[key]
+    }
     return
   }
 
@@ -186,37 +262,126 @@ document.addEventListener('click', e => {
   }
 })
 
+const DROP_ACCEPT =
+  'image/png,image/jpeg,image/jpg,image/gif,image/webp,image/bmp,.html,.htm,.json,.md,.txt,.png,.jpg,.jpeg,.gif,.webp'
+
+const DROP_TYPE_ACCEPT = {
+  html: '.html,.htm,text/html',
+  png: 'image/png,.png',
+  jpg: 'image/jpeg,image/jpg,.jpg,.jpeg',
+  json: '.json,application/json',
+  md: '.md,.txt,text/markdown,text/plain',
+}
+
+let activeDropType = 'png'
+
+function isImageFile(file) {
+  if (!file) return false
+  if (file.type?.startsWith('image/')) return true
+  return /\.(png|jpe?g|gif|webp|bmp)$/i.test(file.name || '')
+}
+
+function setDropZoneImageState(active) {
+  const dz = document.getElementById('dropZone')
+  if (dz) dz.classList.toggle('has-image', active)
+}
+
+function highlightDropChip(type) {
+  activeDropType = type
+  document.querySelectorAll('.drop-type-chip').forEach((chip) => {
+    chip.classList.toggle('highlight', chip.dataset.dropType === type)
+  })
+}
+
+function openFilePicker(accept = DROP_ACCEPT) {
+  const inp = document.createElement('input')
+  inp.type = 'file'
+  inp.accept = accept
+  inp.onchange = e => { if (e.target.files[0]) readFile(e.target.files[0]) }
+  inp.click()
+}
+
+async function loadAerohubPerfSample() {
+  pendingImage = null
+  setDropZoneImageState(false)
+  document.getElementById('designType').value = 'ui'
+  setStatus('Loading AeroHub perf-test HTML…')
+  try {
+    const res = await fetch('/data/perf-test-aerohub.html')
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const html = await res.text()
+    document.getElementById('designInput').value = html
+    setStatus('Loaded perf-test-aerohub.html — click Ingest & Map')
+  } catch (e) {
+    console.warn('AeroHub sample fetch failed, using inline fallback', e)
+    document.getElementById('designInput').value = SAMPLES.aerohub || ''
+    setStatus('Loaded inline AeroHub sample — click Ingest & Map')
+  }
+}
+
 // Drop zone file handling
 document.addEventListener('DOMContentLoaded', () => {
   const dz = document.getElementById('dropZone')
   if (!dz) return
 
-  dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over') })
+  dz.addEventListener('dragover', e => {
+    e.preventDefault()
+    dz.classList.add('drag-over')
+  })
   dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'))
   dz.addEventListener('drop', e => {
     e.preventDefault()
     dz.classList.remove('drag-over')
-    const file = e.dataTransfer.files[0]
+    const file = e.dataTransfer?.files?.[0]
     if (!file) return
     readFile(file)
   })
-  dz.addEventListener('click', () => {
-    const inp = document.createElement('input')
-    inp.type = 'file'
-    inp.accept = '.html,.json,.md,.txt'
-    inp.onchange = e => { if (e.target.files[0]) readFile(e.target.files[0]) }
-    inp.click()
+  dz.addEventListener('click', e => {
+    if (e.target.closest('.drop-type-chip')) return
+    openFilePicker(DROP_ACCEPT)
+  })
+
+  dz.querySelectorAll('.drop-type-chip').forEach((chip) => {
+    chip.addEventListener('click', e => {
+      e.preventDefault()
+      e.stopPropagation()
+      const type = chip.dataset.dropType
+      if (!type) return
+      highlightDropChip(type)
+      openFilePicker(DROP_TYPE_ACCEPT[type] || DROP_ACCEPT)
+    })
   })
 })
 
 function readFile(file) {
+  if (isImageFile(file)) {
+    const reader = new FileReader()
+    reader.onload = ev => {
+      const mime = file.type || (file.name?.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg')
+      pendingImage = {
+        data: ev.target.result.replace(/^data:[^;]+;base64,/, ''),
+        mime,
+        name: file.name,
+      }
+      setDropZoneImageState(true)
+      document.getElementById('designInput').value = `[Image: ${file.name}] — click Ingest & Map to run vision pipeline`
+      setStatus(`PNG/image loaded (${file.name}) — click Ingest & Map`)
+    }
+    reader.readAsDataURL(file)
+    return
+  }
+
   const reader = new FileReader()
   reader.onload = ev => {
+    pendingImage = null
+    setDropZoneImageState(false)
     document.getElementById('designInput').value = ev.target.result
-    // Auto-detect JSON
     if (file.name.endsWith('.json')) {
       document.getElementById('designType').value = 'dag'
+    } else if (/\.(html?|htm)$/i.test(file.name)) {
+      document.getElementById('designType').value = 'ui'
     }
+    setStatus(`Loaded ${file.name} — click Ingest & Map`)
   }
   reader.readAsText(file)
 }
@@ -250,7 +415,14 @@ function buildLayout() {
           <div class="drop-icon">⬡</div>
           <div class="drop-label">
             <strong>Drop design file</strong>
-            HTML, JSON DAG, Figma export, or paste below
+            HTML mockup, JSON DAG, or image screenshot
+            <div class="drop-types">
+              <button type="button" class="drop-type-chip" data-drop-type="html">.html</button>
+              <button type="button" class="drop-type-chip highlight" data-drop-type="png">.png</button>
+              <button type="button" class="drop-type-chip" data-drop-type="jpg">.jpg</button>
+              <button type="button" class="drop-type-chip" data-drop-type="json">.json</button>
+              <button type="button" class="drop-type-chip" data-drop-type="md">.md</button>
+            </div>
           </div>
         </div>
 
@@ -291,6 +463,7 @@ function buildLayout() {
             <div class="sample-item" data-sample="agent"><span class="si-icon">◈</span> Agent Loop Workflow</div>
             <div class="sample-item" data-sample="oauth"><span class="si-icon">◈</span> OAuth Provider Flow</div>
             <div class="sample-item" data-sample="qvrm"><span class="si-icon">◈</span> Qvrm Trust Protocol DAG</div>
+            <div class="sample-item" data-sample="aerohub"><span class="si-icon">◈</span> AeroHub STL (perf test HTML)</div>
           </div>
         </div>
       </div>

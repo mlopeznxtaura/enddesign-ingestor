@@ -225,28 +225,29 @@ export function testDownloadScaffoldButton() {
   return true
 }
 
-export function testOpenOutputFolderButton() {
+export function testExportZipButton() {
   const buildUISource = readFileSync(
     join(__dirname, '../src/cli/build-ui.js'),
     'utf-8'
   )
 
-  // Check for Open Output Folder button
-  if (!buildUISource.includes('openOutputFolderBtn') && !buildUISource.includes('Open Output')) {
-    throw new Error('build-ui.js missing Open Output Folder button')
+  if (!buildUISource.includes('exportZipBtn') && !buildUISource.includes('Export Zip')) {
+    throw new Error('build-ui.js missing Export Zip button')
   }
 
-  // Check for open folder handler
-  if (!buildUISource.includes('handleOpenOutputFolder')) {
-    throw new Error('build-ui.js missing handleOpenOutputFolder function')
+  if (!buildUISource.includes('handleExportZip')) {
+    throw new Error('build-ui.js missing handleExportZip function')
   }
 
-  // Check for data-testid
-  if (!buildUISource.includes('data-testid="open-output-folder-button"')) {
-    throw new Error('build-ui.js missing open-output-folder-button testid')
+  if (!buildUISource.includes('data-testid="export-zip-button"')) {
+    throw new Error('build-ui.js missing export-zip-button testid')
   }
 
-  console.log('✓ Open Output Folder button implemented')
+  if (!buildUISource.includes('fflate')) {
+    throw new Error('build-ui.js missing fflate zip export')
+  }
+
+  console.log('✓ Export Zip button implemented')
   return true
 }
 
@@ -371,7 +372,7 @@ export function runBuildUITests() {
   testProgressDisplay()
   testFileCountIndicator()
   testDownloadScaffoldButton()
-  testOpenOutputFolderButton()
+  testExportZipButton()
   testTaskProgressDisplay()
   testBuildUICSS()
   testMainJSIntegration()

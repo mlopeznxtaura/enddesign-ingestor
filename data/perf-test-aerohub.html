@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>AeroHub STL Coder — Perf Test v1</title>
+</head>
+<body>
+  <header class="top-bar">
+    <div class="brand-title">AeroHub STL Coder</div>
+    <button class="btn btn-primary">New</button>
+    <button class="btn btn-secondary">Open</button>
+    <button class="btn btn-build">Build STL</button>
+    <button class="btn btn-export">Export STL</button>
+  </header>
+
+  <main class="layout-3col">
+    <section class="panel left-panel" data-key="left_panel">
+      <h2 class="panel-title">Left Panel — Parametric Parts</h2>
+
+      <div class="parameter-group">
+        <div class="group-label">Wheel Part</div>
+        <div class="input-row">
+          <label>Outer Diameter (mm)</label>
+          <input type="number" value="120" data-param="outer_diameter" />
+        </div>
+        <div class="input-row">
+          <label>Rim Width (mm)</label>
+          <input type="number" value="8" data-param="rim_width" />
+        </div>
+        <div class="input-row">
+          <label>Hub Bore (mm)</label>
+          <input type="number" value="15" data-param="hub_bore" />
+        </div>
+        <div class="input-row">
+          <label>Spoke Count</label>
+          <input type="number" value="6" data-param="spoke_count" />
+        </div>
+      </div>
+
+      <div class="parameter-group">
+        <div class="group-label">Stator Ring</div>
+        <div class="input-row">
+          <label>Inner Radius (mm)</label>
+          <input type="number" value="45" data-param="inner_radius" />
+        </div>
+        <div class="input-row">
+          <label>Outer Radius (mm)</label>
+          <input type="number" value="60" data-param="outer_radius" />
+        </div>
+        <div class="input-row">
+          <label>Thickness (mm)</label>
+          <input type="number" value="3" data-param="thickness" />
+        </div>
+        <div class="input-row">
+          <label>Material</label>
+          <select data-param="material">
+            <option selected>Permendur</option>
+            <option>Aluminum 6061</option>
+            <option>Titanium Ti-6Al-4V</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="parameter-group">
+        <div class="group-label">Project Settings</div>
+        <div class="input-row">
+          <label>Project Name</label>
+          <input type="text" value="aerohub-wheel-v1" data-param="project_name" />
+        </div>
+        <div class="input-row">
+          <label>Model Resolution</label>
+          <input type="number" value="1024" data-param="model_resolution" />
+        </div>
+        <div class="input-row">
+          <label>Units</label>
+          <select data-param="units">
+            <option selected>metric</option>
+            <option>imperial</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel center-panel" data-key="center_viewport">
+      <h2 class="panel-title">Center Panel — Real-time 3D Viewport</h2>
+      <div class="viewport-placeholder">3D preview of parametric wheel + stator assembly</div>
+    </section>
+
+    <section class="panel right-panel" data-key="right_editor">
+      <h2 class="panel-title">Right Panel — Live STL Code Editor</h2>
+      <div class="code-area">
+from build123d import *
+wheel = Cylinder(radius=60, height=8)
+export_stl(wheel, "wheel.stl")
+      </div>
+    </section>
+  </main>
+</body>
+</html>

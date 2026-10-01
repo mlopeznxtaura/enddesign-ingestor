@@ -29,7 +29,7 @@ export function generateComponents(layers, target = 'full') {
   }
 
   if (target === 'task_json' || target === 'full') {
-    components.push(taskStatusJson(fnNodes, root))
+    components.push(taskStatusJson(fnNodes, root, allNodes))
   }
 
   return components
@@ -164,17 +164,22 @@ function dagJson(allNodes, root) {
 }
 
 // ── TASK_STATUS.JSON ────────────────────────────────────────────────────
-function taskStatusJson(fnNodes, root) {
-  const tasks = fnNodes.slice(0, 10).map((n, i) => ({
-    id: n.id,
-    name: n.name,
-    desc: n.desc || '',
-    status: 'pending',
-    hash: null,
-    retries: 0,
-    result: null,
-    updatedAt: null,
-  }))
+function taskStatusJson(fnNodes, root, allNodes = [], domain = 'app-ui') {
+  const buildNodes = allNodes.length ? allNodes : fnNodes
+  const tasks = buildNodes
+    .filter((n) => n.type !== 'root')
+    .slice(0, 24)
+    .map((n) => ({
+      id: n.id,
+      name: n.name,
+      desc: n.desc || '',
+      type: n.type,
+      status: 'pending',
+      hash: null,
+      retries: 0,
+      result: null,
+      updatedAt: null,
+    }))
 
   const obj = {
     version: '1.0',
@@ -182,6 +187,7 @@ function taskStatusJson(fnNodes, root) {
     meta: {
       root: root.id,
       rootName: root.name,
+      domain,
       loopActive: false,
       completedAt: null,
     },

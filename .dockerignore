@@ -1,0 +1,12 @@
+﻿.git
+node_modules
+.pytest_cache
+agent.log
+cloudflare
+scripts
+tests
+docs
+output
+exports
+.env
+.env.*

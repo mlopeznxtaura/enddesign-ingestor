@@ -57,5 +57,22 @@ Root: TrustEvent
 +-- GovernanceVote
     +-- QuorumCheck
     +-- VoteCast
-    +-- ResolutionEmit`
+    +-- ResolutionEmit`,
+
+  aerohub: `<!DOCTYPE html><html lang="en"><head><title>AeroHub STL Coder</title></head><body>
+<header class="top-bar"><div class="brand-title">AeroHub STL Coder</div>
+<button class="btn btn-primary">New</button><button class="btn btn-export">Export STL</button></header>
+<main><section class="panel left-panel" data-key="left_panel">
+<h2 class="panel-title">Left Panel — Parametric Parts</h2>
+<div class="parameter-group"><div class="group-label">Wheel Part</div>
+<div class="input-row"><label>Outer Diameter (mm)</label><input value="120" data-param="outer_diameter"/></div>
+<div class="input-row"><label>Rim Width (mm)</label><input value="8" data-param="rim_width"/></div>
+<div class="input-row"><label>Hub Bore (mm)</label><input value="15" data-param="hub_bore"/></div></div>
+<div class="parameter-group"><div class="group-label">Stator Ring</div>
+<div class="input-row"><label>Material</label><select><option selected>Permendur</option></select></div></div>
+</section><section class="panel center-panel" data-key="center_viewport">
+<h2 class="panel-title">Center Panel — 3D Viewport</h2></section>
+<section class="panel right-panel" data-key="right_editor">
+<h2 class="panel-title">Live STL Code Editor</h2>
+<div class="code-area">from build123d import *\nexport_stl(wheel, "wheel.stl")</div></section></main></body></html>`
 }

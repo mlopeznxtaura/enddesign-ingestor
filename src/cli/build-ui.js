@@ -4,9 +4,12 @@
  * with the main application UI.
  */
 
+import { zipSync, strToU8 } from 'fflate';
+import { scaffoldPackageJson } from '../../shared/stl-templates.js';
+
 // Build state
 let buildState = {
-  status: 'idle', // idle, running, done, error
+  status: 'idle', // idle, running, done, error, blocked
   logs: [],
   currentTask: null,
   completedTasks: 0,
@@ -14,10 +17,22 @@ let buildState = {
   generatedFiles: [],
   selectedFile: null,
   selectedFileContent: null,
+  liveFilePath: null,
+  autoLive: true,
+  sandboxMode: 'code', // code | preview
+  stepResults: [],
+  repairState: null,
+  blockedTask: null,
+  allowSkipBlocked: false,
+  pipeline: 'legacy',
+  manifest: null,
 };
 
 // Build process reference
 let buildProcess = null;
+let statusPoller = null;
+const AGENT_API = '/api/agent';
+let sandboxPreviewDoc = '';
 
 /**
  * Initialize the build UI
@@ -64,18 +79,28 @@ function buildConsoleHTML() {
           <span>Build Console</span>
         </div>
         <div class="build-console-controls">
+          <label class="skip-blocked-toggle" title="When off, build halts on critical step failure">
+            <input type="checkbox" id="skipBlockedToggle" data-testid="skip-blocked-toggle" ${buildState.allowSkipBlocked ? 'checked' : ''} />
+            <span>Skip blocked</span>
+          </label>
           <span class="status-badge status-${buildState.status}" data-testid="build-status">
             ${getStatusLabel(buildState.status)}
           </span>
-          ${buildState.status === 'idle' || buildState.status === 'done' || buildState.status === 'error' 
+          ${buildState.repairState
+            ? `<span class="repair-banner" data-testid="repair-banner">Repair ${escapeHtml(buildState.repairState.path || '')} (${buildState.repairState.attempt}/${buildState.repairState.maxAttempts || 3})</span>`
+            : ''}
+          ${buildState.blockedTask && buildState.status === 'blocked'
+            ? `<span class="blocked-chip" data-testid="blocked-chip">BLOCKED: ${escapeHtml(buildState.blockedTask)}</span>`
+            : ''}
+          ${buildState.status === 'idle' || buildState.status === 'done' || buildState.status === 'error' || buildState.status === 'blocked'
             ? `<button class="btn btn-start" id="startBuildBtn" data-testid="start-build-button">▶ Start Build</button>`
             : `<button class="btn btn-stop" id="stopBuildBtn" data-testid="stop-build-button">⏹ Stop</button>`
           }
           <button class="btn btn-download" id="downloadScaffoldBtn" data-testid="download-scaffold-button" ${buildState.generatedFiles.length === 0 ? 'disabled' : ''}>
             📥 Download Scaffold
           </button>
-          <button class="btn btn-open" id="openOutputFolderBtn" data-testid="open-output-folder-button">
-            📂 Open Output
+          <button class="btn btn-open" id="exportZipBtn" data-testid="export-zip-button" ${buildState.generatedFiles.length === 0 ? 'disabled' : ''}>
+            📦 Export Zip
           </button>
         </div>
       </div>
@@ -90,29 +115,144 @@ function buildConsoleHTML() {
           </div>
           <div class="progress-stats">
             <span class="stat" data-testid="file-count">📁 ${buildState.generatedFiles.length} files</span>
-            <span class="stat" data-testid="task-progress">📋 ${buildState.currentTask || 'Waiting...'}</span>
+            <span class="stat" data-testid="task-progress">📋 ${escapeHtml(buildState.currentTask || 'Waiting...')}${buildState.pipeline && buildState.pipeline !== 'legacy' ? ` · ${buildState.pipeline}` : ''}</span>
           </div>
         </div>
-        <div class="build-logs" data-testid="build-logs">
-          <div class="logs-header">
-            <span>📜 Build Logs</span>
-            <span class="logs-count">${buildState.logs.length} entries</span>
+        <div class="build-split-panel" data-testid="build-split-panel">
+          <div class="build-logs-column">
+            <div class="build-logs" data-testid="build-logs">
+              <div class="logs-header">
+                <span>📜 Build Logs</span>
+                <span class="logs-count">${buildState.logs.length} entries</span>
+              </div>
+              <div class="logs-content" id="buildLogsContent">
+                ${buildState.logs.length === 0 
+                  ? '<div class="logs-empty">No logs yet. Start a build to see output.</div>'
+                  : buildState.logs.map(log => `
+                      <div class="log-entry log-${log.level || 'info'}">
+                        <span class="log-timestamp">${formatTimestamp(log.timestamp)}</span>
+                        <span class="log-message">${escapeHtml(log.message)}</span>
+                      </div>
+                    `).join('')
+                }
+              </div>
+            </div>
           </div>
-          <div class="logs-content">
-            ${buildState.logs.length === 0 
-              ? '<div class="logs-empty">No logs yet. Start a build to see output.</div>'
-              : buildState.logs.map(log => `
-                  <div class="log-entry log-${log.level || 'info'}">
-                    <span class="log-timestamp">${formatTimestamp(log.timestamp)}</span>
-                    <span class="log-message">${escapeHtml(log.message)}</span>
-                  </div>
-                `).join('')
-            }
+          <div class="live-sandbox-column" data-testid="live-sandbox">
+            ${liveSandboxHTML()}
           </div>
         </div>
       </div>
     </div>
   `;
+}
+
+/**
+ * Live sandbox panel — follows codegen in real time
+ */
+function liveSandboxHTML() {
+  const file = getLiveSandboxFile();
+  const step = getStepResultForPath(file?.path);
+  const isLive = buildState.autoLive && buildState.status === 'running';
+  const chips = (step?.tests || []).map((t) => `
+    <span class="step-chip ${t.pass ? 'pass' : 'fail'}" title="${escapeHtml(t.message)}">${t.pass ? '✓' : '✗'} ${t.id}</span>
+  `).join('');
+
+  return `
+    <div class="sandbox-toolbar">
+      <span class="sandbox-title">▶ Live Sandbox</span>
+      <span class="live-indicator ${isLive ? 'active' : ''}" data-testid="live-indicator">${isLive ? '● LIVE' : '○ PAUSED'}</span>
+      <button type="button" class="btn btn-sandbox" id="sandboxRunBtn" data-testid="sandbox-run-button" ${!file ? 'disabled' : ''}>Run</button>
+      <button type="button" class="btn btn-sandbox" id="sandboxLiveBtn" data-testid="sandbox-live-button">${buildState.autoLive ? 'Follow: ON' : 'Follow: OFF'}</button>
+      <button type="button" class="btn btn-sandbox" id="sandboxCodeBtn" data-testid="sandbox-code-button" ${buildState.sandboxMode === 'code' ? 'disabled' : ''}>Code</button>
+    </div>
+    <div class="sandbox-meta">
+      <span class="sandbox-task" data-testid="sandbox-task">${escapeHtml(buildState.currentTask || 'Waiting for task…')}</span>
+      <span class="sandbox-path" data-testid="sandbox-path">${file ? escapeHtml(file.path) : '—'}</span>
+      ${file?.status ? `<span class="sandbox-status status-${file.status}">${file.status}</span>` : ''}
+    </div>
+    <div class="sandbox-step-chips" data-testid="sandbox-step-chips">${chips || '<span class="step-chip idle">step tests pending</span>'}</div>
+    <div class="sandbox-body ${buildState.sandboxMode === 'preview' ? 'mode-preview' : 'mode-code'}">
+      <pre class="sandbox-code" id="sandboxCode" data-testid="sandbox-code"><code>${file?.content ? escapeHtml(file.content) : '<span class="sandbox-empty">Start build — code appears here as each file is written</span>'}</code></pre>
+      <iframe class="sandbox-preview" id="sandboxPreview" data-testid="sandbox-preview" title="Run preview" sandbox="allow-scripts"></iframe>
+    </div>
+  `;
+}
+
+function getLiveSandboxFile() {
+  if (buildState.liveFilePath) {
+    return buildState.generatedFiles.find((f) => f.path === buildState.liveFilePath);
+  }
+  if (buildState.selectedFile) {
+    return buildState.generatedFiles.find((f) => f.path === buildState.selectedFile);
+  }
+  return buildState.generatedFiles[buildState.generatedFiles.length - 1];
+}
+
+function getStepResultForPath(path) {
+  if (!path || !buildState.stepResults?.length) return null;
+  return buildState.stepResults.find((s) => s.path === path);
+}
+
+function syncLiveFromPoll(data) {
+  if (data.stepResults?.length) {
+    buildState.stepResults = data.stepResults;
+  }
+
+  const logs = data.logs || [];
+  const last = logs[logs.length - 1];
+  if (last?.message?.startsWith('Wrote file:')) {
+    const path = last.message.replace('Wrote file:', '').trim();
+    if (buildState.autoLive) buildState.liveFilePath = path;
+  }
+
+  const files = data.files || data.generatedFiles || [];
+  if (buildState.autoLive && files.length) {
+    const byTask = data.currentTask
+      ? files.find((f) => f.taskId === data.currentTask || f.path?.includes(data.currentTask))
+      : null;
+    buildState.liveFilePath = byTask?.path || files[files.length - 1].path;
+    buildState.selectedFile = buildState.liveFilePath;
+  }
+}
+
+function handleSandboxRun() {
+  const file = getLiveSandboxFile();
+  if (!file?.content) return;
+  buildState.sandboxMode = 'preview';
+
+  if (file.path.endsWith('.py')) {
+    sandboxPreviewDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;background:#0d1117;color:#e6edf3;font-family:Consolas,monospace;padding:16px">
+      <h3 style="color:#58a6ff;font-family:system-ui">Python — ${escapeHtml(file.name)}</h3>
+      <pre style="white-space:pre-wrap;font-size:12px">${escapeHtml(file.content)}</pre>
+      <p style="color:#8b949e;font-family:system-ui;font-size:12px">Export zip → pip install build123d → python ${escapeHtml(file.path)}</p>
+    </body></html>`;
+  } else {
+    const labels = [...file.content.matchAll(/<h[12][^>]*>([^<]+)/gi)].map((m) => m[1].trim()).filter(Boolean);
+    const buttons = [...file.content.matchAll(/<button[^>]*>([^<]+)/gi)].map((m) => m[1].trim()).filter(Boolean);
+    const uiBits = labels.map((l) => `<div style="padding:10px 12px;border:1px solid #30363d;border-radius:8px;margin:8px 0;background:#161b22">${escapeHtml(l)}</div>`).join('');
+    const btnBits = buttons.map((b) => `<button style="margin:4px;padding:6px 12px;border-radius:6px;border:1px solid #30363d;background:#21262d;color:#e6edf3">${escapeHtml(b)}</button>`).join('');
+    sandboxPreviewDoc = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;background:#0d1117;color:#e6edf3;padding:16px;font-family:system-ui">
+      <h3 style="color:#58a6ff;margin:0 0 12px">Preview — ${escapeHtml(file.name)}</h3>
+      ${uiBits || '<p style="color:#8b949e">Component scaffold</p>'}
+      ${btnBits ? `<div style="margin-top:12px">${btnBits}</div>` : ''}
+      <hr style="border-color:#30363d;margin:16px 0"/>
+      <pre style="font-size:11px;color:#8b949e;white-space:pre-wrap;max-height:200px;overflow:auto">${escapeHtml(file.content.slice(0, 1200))}</pre>
+    </body></html>`;
+  }
+
+  renderBuildUI();
+  addLog(`Sandbox run: ${file.path}`, 'info');
+}
+
+function handleSandboxLiveToggle() {
+  buildState.autoLive = !buildState.autoLive;
+  renderBuildUI();
+}
+
+function handleSandboxCodeView() {
+  buildState.sandboxMode = 'code';
+  renderBuildUI();
 }
 
 /**
@@ -178,6 +318,12 @@ function codePreviewHTML() {
  * Setup event listeners
  */
 function setupEventListeners() {
+  document.addEventListener('change', (e) => {
+    if (e.target.id === 'skipBlockedToggle') {
+      handleSkipBlockedToggle(e.target.checked);
+    }
+  });
+
   document.addEventListener('click', (e) => {
     // Start Build button
     if (e.target.id === 'startBuildBtn') {
@@ -197,9 +343,24 @@ function setupEventListeners() {
       return;
     }
 
-    // Open Output Folder button
-    if (e.target.id === 'openOutputFolderBtn') {
-      handleOpenOutputFolder();
+    // Export Zip button
+    if (e.target.id === 'exportZipBtn') {
+      handleExportZip();
+      return;
+    }
+
+    if (e.target.id === 'sandboxRunBtn') {
+      handleSandboxRun();
+      return;
+    }
+
+    if (e.target.id === 'sandboxLiveBtn') {
+      handleSandboxLiveToggle();
+      return;
+    }
+
+    if (e.target.id === 'sandboxCodeBtn') {
+      handleSandboxCodeView();
       return;
     }
 
@@ -218,75 +379,188 @@ function setupEventListeners() {
   });
 }
 
+async function handleSkipBlockedToggle(checked) {
+  buildState.allowSkipBlocked = checked;
+  try {
+    await fetch(`${AGENT_API}/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ allowSkipBlocked: checked }),
+    });
+    addLog(`Skip blocked tasks: ${checked ? 'ON' : 'OFF'}`, 'info');
+  } catch (err) {
+    addLog(`Config error: ${err.message}`, 'warn');
+  }
+}
+
 /**
  * Handle Start Build
  */
 async function handleStartBuild() {
   addLog('Initializing Agent Bridge connection...', 'info');
   updateBuildStatus('running');
+  buildState.autoLive = true;
+  buildState.sandboxMode = 'code';
+  buildState.liveFilePath = null;
+  buildState.stepResults = [];
+
+  const layers = getCurrentDAG();
+  if (!layers.length) {
+    addLog('No DAG loaded — ingest a design first', 'warn');
+    updateBuildStatus('error');
+    return;
+  }
+
+  const nodeCount = layers.flatMap((l) => l.nodes || []).filter((n) => n.type !== 'root').length;
+  if (nodeCount < 2) {
+    addLog('DAG too small — re-ingest full HTML mockup before build', 'warn');
+    updateBuildStatus('error');
+    return;
+  }
 
   try {
-    // 1. Trigger agent start via API
-    const response = await fetch('http://localhost:8000/start?resume=true', { method: 'POST' });
-    if (!response.ok) throw new Error('Failed to start agent API');
-    
+    const response = await fetch(`${AGENT_API}/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        layers,
+        resume: true,
+        target: 'react',
+        taskPlan: window.pipelineTaskPlan || null,
+        domain: window.pipelineContext?.domain || 'app-ui',
+        fidelity: window.pipelineContext?.fidelity || null,
+        allowSkipBlocked: buildState.allowSkipBlocked,
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to start agent API');
+    }
+
     addLog('Agent process spawned successfully', 'success');
-    
-    // 2. Connect to log websocket
-    const socket = new WebSocket('ws://localhost:8000/ws/logs');
-    
-    socket.onopen = () => {
-      addLog('Live log stream connected', 'info');
-    };
-    
-    socket.onmessage = (event) => {
-      try {
-        const log = JSON.parse(event.data);
-        addLog(log.message, log.level || 'info');
-        
-        // Update task progress if possible
-        if (log.message.includes('Processing task:')) {
-          const taskId = log.message.split('Processing task:')[1].trim();
-          updateBuildState({ currentTask: taskId });
-        }
-        
-        if (log.message.includes('Task completed:')) {
-          buildState.completedTasks += 1;
-          renderBuildUI();
-        }
-        
-        if (log.message.includes('Wrote file:')) {
-          const filePath = log.message.split('Wrote file:')[1].trim();
-          const fileName = filePath.split('\\').pop().split('/').pop();
-          addGeneratedFile({ path: filePath, name: fileName, status: 'generated' });
-        }
-        
-        if (log.message.includes('Agent loop finished:')) {
-          updateBuildStatus('done');
-          socket.close();
-        }
-      } catch (err) {
-        console.error('Log parse error:', err);
-      }
-    };
-    
-    socket.onerror = (err) => {
-      addLog('Log stream websocket error', 'error');
-      updateBuildStatus('error');
-    };
-    
-    socket.onclose = () => {
-      addLog('Live log stream closed', 'info');
-    };
+    buildState.logs = [];
+    startStatusPolling();
 
-    buildProcess = { stop: () => {
-      socket.close();
-      fetch('http://localhost:8000/stop', { method: 'POST' });
-    }};
-
+    buildProcess = {
+      stop: () => {
+        stopStatusPolling();
+        fetch(`${AGENT_API}/stop`, { method: 'POST' });
+      },
+    };
   } catch (error) {
     addLog(`Agent error: ${error.message}`, 'error');
     updateBuildStatus('error');
+  }
+}
+
+function startStatusPolling() {
+  stopStatusPolling();
+  let lastLogCount = 0;
+
+  statusPoller = setInterval(async () => {
+    try {
+      const res = await fetch(`${AGENT_API}/status`);
+      if (!res.ok) return;
+      const data = await res.json();
+
+      if (data.totalTasks) {
+        buildState.totalTasks = data.totalTasks;
+      }
+      if (data.completedTasks !== undefined) {
+        buildState.completedTasks = data.completedTasks;
+      }
+      if (data.currentTask) {
+        buildState.currentTask = data.currentTask;
+      }
+
+      if (data.repairState) {
+        buildState.repairState = data.repairState;
+      } else if (buildState.status !== 'running') {
+        buildState.repairState = null;
+      }
+      if (data.blockedTask !== undefined) {
+        buildState.blockedTask = data.blockedTask;
+      }
+      if (data.allowSkipBlocked !== undefined) {
+        buildState.allowSkipBlocked = data.allowSkipBlocked;
+      }
+
+      if (data.pipeline) {
+        buildState.pipeline = data.pipeline;
+      }
+      if (data.manifest) {
+        buildState.manifest = data.manifest;
+      }
+
+      const logs = data.logs || [];
+      if (logs.length > lastLogCount) {
+        for (let i = lastLogCount; i < logs.length; i++) {
+          const log = logs[i];
+          buildState.logs.push({
+            id: Date.now() + Math.random(),
+            message: log.message,
+            level: log.level || 'info',
+            timestamp: log.timestamp,
+          });
+          if (buildState.autoLive && log.message?.startsWith('Wrote file:')) {
+            buildState.liveFilePath = log.message.replace('Wrote file:', '').trim();
+            buildState.selectedFile = buildState.liveFilePath;
+          }
+        }
+        lastLogCount = logs.length;
+      }
+
+      syncLiveFromPoll(data);
+
+      const files = data.files || data.generatedFiles || [];
+      if (files.length) {
+        buildState.generatedFiles = files;
+      }
+
+      if (data.status === 'running') {
+        buildState.status = 'running';
+      } else if (data.status === 'done') {
+        updateBuildStatus('done');
+        stopStatusPolling();
+        buildState.repairState = null;
+        if (data.fidelity) {
+          window.pipelineContext = { ...window.pipelineContext, buildFidelity: data.fidelity };
+        }
+        if (data.verification) {
+          window.pipelineContext = { ...window.pipelineContext, verification: data.verification };
+        }
+        if (data.stepResults) {
+          window.pipelineContext = {
+            ...window.pipelineContext,
+            stepResults: data.stepResults,
+            stepSummary: data.stepSummary,
+          };
+        }
+      } else if (data.status === 'error') {
+        updateBuildStatus('error');
+        stopStatusPolling();
+        buildState.repairState = null;
+      } else if (data.status === 'blocked') {
+        updateBuildStatus('blocked');
+        stopStatusPolling();
+        addLog(`Build blocked at task: ${data.blockedTask || 'unknown'}`, 'error');
+      } else if (data.status === 'idle' && buildState.status === 'running') {
+        updateBuildStatus('idle');
+        stopStatusPolling();
+      }
+
+      renderBuildUI();
+    } catch (err) {
+      console.error('Status poll error:', err);
+    }
+  }, 600);
+}
+
+function stopStatusPolling() {
+  if (statusPoller) {
+    clearInterval(statusPoller);
+    statusPoller = null;
   }
 }
 
@@ -294,27 +568,51 @@ async function handleStartBuild() {
  * Handle Stop Build
  */
 function handleStopBuild() {
-  if (buildProcess) {
-    buildProcess.stop = true;
+  if (buildProcess?.stop) {
+    buildProcess.stop();
     addLog('Stopping build process...', 'warn');
   }
+  stopStatusPolling();
   updateBuildStatus('idle');
 }
 
 /**
- * Handle Download Scaffold
+ * Fetch latest generated files from agent API or local state.
  */
-function handleDownloadScaffold() {
-  if (buildState.generatedFiles.length === 0) {
+async function fetchGeneratedFiles() {
+  let files = buildState.generatedFiles;
+  try {
+    const res = await fetch(`${AGENT_API}/status`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.files?.length) {
+        files = data.files;
+        buildState.generatedFiles = files;
+      }
+    }
+  } catch {
+    // use local state
+  }
+  return files;
+}
+
+/**
+ * Handle Download Scaffold (JSON bundle)
+ */
+async function handleDownloadScaffold() {
+  const files = await fetchGeneratedFiles();
+
+  if (files.length === 0) {
     addLog('No files to download', 'warn');
     return;
   }
 
-  // Create ZIP-like bundle (simplified - in production use JSZip)
   const bundle = {
-    files: buildState.generatedFiles,
+    files,
     timestamp: new Date().toISOString(),
-    totalFiles: buildState.generatedFiles.length,
+    totalFiles: files.length,
+    domain: window.pipelineContext?.domain || 'app-ui',
+    fidelity: window.pipelineContext?.fidelity || null,
   };
 
   const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
@@ -325,21 +623,68 @@ function handleDownloadScaffold() {
   a.click();
   URL.revokeObjectURL(url);
 
-  addLog(`Downloaded ${buildState.generatedFiles.length} files`, 'success');
+  addLog(`Downloaded ${files.length} files (JSON)`, 'success');
 }
 
 /**
- * Handle Open Output Folder
+ * Handle Export Zip — downloadable project folder
  */
-function handleOpenOutputFolder() {
-  // In browser environment, we can't directly open folders
-  // This would be handled by Tauri's shell API in the desktop app
-  addLog('Opening output folder...', 'info');
+async function handleExportZip() {
+  const files = await fetchGeneratedFiles();
 
-  // For web, show a message or redirect to output directory listing
-  const message = 'Output folder: ./output/\n\nIn the desktop app, this will open your file explorer.';
-  alert(message);
-  addLog('Output folder path: ./output/', 'info');
+  if (files.length === 0) {
+    addLog('No files to export — run a build first', 'warn');
+    return;
+  }
+
+  try {
+    const domain = window.pipelineContext?.domain || 'app-ui';
+    const buildFidelity = window.pipelineContext?.buildFidelity;
+    const verification = window.pipelineContext?.verification;
+    const stepSummary = window.pipelineContext?.stepSummary;
+    const meta = {
+      generator: 'EndDesign Ingestor',
+      pipeline: window.pipelineContext?.pipeline || buildState.pipeline || 'legacy',
+      domain,
+      manifest: window.pipelineManifest || buildState.manifest || window.pipelineContext?.manifest || null,
+      fidelity: buildFidelity || window.pipelineContext?.fidelity || null,
+      structureFidelity: window.pipelineContext?.fidelity || null,
+      verification: verification
+        ? { compileScore: verification.compileScore, issues: verification.issues, ok: verification.ok }
+        : null,
+      stepSummary: stepSummary || null,
+      stepResults: window.pipelineContext?.stepResults || null,
+      timestamp: new Date().toISOString(),
+      totalFiles: files.length,
+      files: files.map((f) => f.path),
+    };
+
+    const zipEntries = {};
+    zipEntries['scaffold-meta.json'] = strToU8(JSON.stringify(meta, null, 2));
+    zipEntries['package.json'] = strToU8(scaffoldPackageJson(domain));
+    zipEntries['README.md'] = strToU8(
+      `# EndDesign Scaffold\n\nDomain: ${domain}\nSource files: ${files.length}\nHonest fidelity: ${meta.fidelity?.score ?? 'n/a'}%\nGenerated: ${meta.timestamp}\n\nRun: npm install && npm run dev\n`,
+    );
+
+    for (const file of files) {
+      const path = (file.path || file.name || 'unknown.txt').replace(/^\/+/, '');
+      if (!path || zipEntries[path]) continue;
+      zipEntries[path] = strToU8(file.content || '');
+    }
+
+    const zipped = zipSync(zipEntries);
+    const blob = new Blob([zipped], { type: 'application/zip' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `scaffold-${domain}-${Date.now()}.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    addLog(`Exported ${files.length} source files as ZIP (+ scaffold-meta.json)`, 'success');
+  } catch (err) {
+    addLog(`ZIP export failed: ${err.message}`, 'error');
+  }
 }
 
 /**
@@ -466,6 +811,11 @@ function renderBuildUI() {
 
   if (consoleContainer) {
     consoleContainer.innerHTML = buildConsoleHTML();
+    scrollBuildLogsToEnd();
+    const iframe = document.getElementById('sandboxPreview');
+    if (iframe && buildState.sandboxMode === 'preview' && sandboxPreviewDoc) {
+      iframe.srcdoc = sandboxPreviewDoc;
+    }
   }
   if (fileTreeContainer) {
     fileTreeContainer.innerHTML = fileTreeHTML();
@@ -485,6 +835,7 @@ function getStatusLabel(status) {
     done: 'Complete',
     error: 'Error',
     paused: 'Paused',
+    blocked: 'Blocked',
   };
   return labels[status] || 'Unknown';
 }
@@ -504,6 +855,11 @@ function formatTimestamp(timestamp) {
   if (!timestamp) return '';
   const date = new Date(timestamp);
   return date.toLocaleTimeString();
+}
+
+function scrollBuildLogsToEnd() {
+  const el = document.getElementById('buildLogsContent');
+  if (el) el.scrollTop = el.scrollHeight;
 }
 
 /**

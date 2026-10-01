@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Pipeline CRM — Lead Kanban</title>
+</head>
+<body>
+  <header class="top-bar">
+    <div class="brand-title">Pipeline CRM</div>
+    <button id="btn-new" class="btn btn-primary" data-action="add_lead">Add Lead</button>
+    <button id="btn-sync" class="btn btn-secondary" data-action="sync">Sync</button>
+    <button id="btn-export" class="btn btn-export" data-action="export_csv">Export CSV</button>
+  </header>
+
+  <aside class="sidebar">
+    <h2 class="panel-title">Navigation</h2>
+    <ul class="nav-list">
+      <li><a href="#leads">Leads <span class="badge">143</span></a></li>
+      <li><a href="#pipeline">Pipeline</a></li>
+      <li><a href="#reports">Reports</a></li>
+    </ul>
+    <button class="btn btn-sidebar" data-action="filter_leads">Filter</button>
+  </aside>
+
+  <main class="main-view">
+    <h2 class="panel-title">Kanban Pipeline</h2>
+    <div class="kanban-columns">
+      <div class="kanban-col"><h3>New</h3><div class="lead-card">Acme Corp</div></div>
+      <div class="kanban-col"><h3>Qualified</h3><div class="lead-card">Beta SaaS</div></div>
+      <div class="kanban-col"><h3>Proposal</h3><div class="lead-card">Gamma Inc</div></div>
+    </div>
+    <button class="btn" data-action="toggle_view">Toggle View</button>
+    <button class="btn" data-action="move">Move Card</button>
+  </main>
+
+  <aside class="right-panel">
+    <h2 class="panel-title">Lead Detail</h2>
+    <div class="lead-detail">
+      <p>Select a lead to view details</p>
+    </div>
+    <button class="btn" data-action="edit_lead">Edit</button>
+  </aside>
+
+  <div id="addLeadModal" class="modal hidden" role="dialog">
+    <h2>Add Lead</h2>
+    <form class="modal-form">
+      <label>Full Name <input type="text" data-field="lead_name" value="Jane Doe" /></label>
+      <label>Company <input type="text" data-field="lead_company" value="Acme Corp" /></label>
+      <label>Value <input type="number" data-field="lead_value" value="50000" /></label>
+    </form>
+    <button class="btn btn-primary" data-action="save_lead">Save Lead</button>
+    <button class="btn" data-action="cancel">Cancel</button>
+  </div>
+</body>
+</html>

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Stress B — Full Layout</title>
+</head>
+<body>
+  <header class="top-bar app-top-bar">
+    <div class="brand-title">Ops Console</div>
+    <nav class="top-bar-actions">
+      <button type="button" class="btn" data-action="sync">Sync</button>
+      <button type="button" class="btn" data-action="Generate_Report">Report A</button>
+      <button type="button" class="btn" data-action="Generate_Report">generate report (again)</button>
+    </nav>
+  </header>
+
+  <aside class="sidebar left-nav">
+    <ul>
+      <li><a href="#">Alerts</a></li>
+      <li><a href="#">Incidents</a></li>
+    </ul>
+    <button type="button" class="btn btn-sidebar" data-action="export_csv">Export CSV</button>
+  </aside>
+
+  <main class="main-view">
+    <section class="chart-panel">
+      <h2>Latency Chart</h2>
+      <div class="chart-canvas"></div>
+    </section>
+    <section class="kanban-board">
+      <div class="kanban-col">
+        <h3>Open</h3>
+        <div class="kanban-card" data-action="open_card">Card detail</div>
+      </div>
+    </section>
+  </main>
+
+  <aside class="right-panel panel">
+    <h2>Incident detail</h2>
+    <button type="button" class="btn" data-action="silence_alerts">Silence 15m</button>
+  </aside>
+
+  <div id="confirm_modal" class="modal overlay" role="dialog">
+    <div class="modal-content">
+      <h2>Confirm close</h2>
+      <button type="button" class="btn" data-action="confirm_close">Yes, close</button>
+    </div>
+  </div>
+
+  <div id="postmortem_modal" class="modal overlay" role="dialog">
+    <div class="modal-content">
+      <h2>Postmortem</h2>
+      <label class="field"><span>Notes</span><input data-field="postmortem_notes" /></label>
+      <button type="button" class="btn" data-action="save_postmortem">Save &amp; Continue</button>
+    </div>
+  </div>
+</body>
+</html>

@@ -2,6 +2,8 @@
 // Supports: HTML (data-key), JSON DAG
 
 import { parseHTMLDOM, itemsToDAGLayers } from './html-dom-parser.js'
+import { extractHTMLStructure } from '../../shared/structure-extract.js'
+import { structureToDAGLayers } from '../../shared/structure-to-dag.js'
 
 /**
  * Top-level entry. Returns an array of layers, each with { label, nodes[] }.
@@ -53,6 +55,12 @@ function parseHTMLWithDOM(text) {
   if (result.items && result.items.length > 0) {
     return itemsToDAGLayers(result.items)
   }
+
+  const structure = extractHTMLStructure(text)
+  if (structure.columns.length || structure.parts.length || structure.params.length) {
+    return structureToDAGLayers(structure)
+  }
+
   return []
 }
 
